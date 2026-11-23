@@ -133,7 +133,11 @@ def load_ply(file_path):
         raise ValueError("Unsupported PLY format")
     return points, labels
 
-def save_ply(file_path, points, labels):
+def save_ply(file_path, points, labels, offset=None):
+    # Shift back into the input cloud's original coordinate frame
+    # (the loader centred x/y on their mean and z on its min).
+    if offset is not None:
+        points = points.astype(np.float64) + offset
     dtype = [('x', 'f8'), ('y', 'f8'), ('z', 'f8'),
              ('semantic_pred', 'i4'), ('instance_pred', 'i4'), ('score', 'f4'),
              ('semantic_gt', 'i4'), ('instance_gt', 'i4')]
@@ -209,7 +213,7 @@ def compute_instance_values(points, semantic_labels, instance_labels):
     return instance_values
 
 
-def process_and_save_ply(points, labels, output_file):
+def process_and_save_ply(points, labels, output_file, offset=None):
     start_all = time.time()
     semantic_pred = labels[:, 0]
     instance_pred = labels[:, 1]
@@ -238,9 +242,10 @@ def process_and_save_ply(points, labels, output_file):
         ('semantic_pred', 'i4'), ('instance_pred', 'i4'), ('instance_score', 'f4')
     ])
     
-    vertex_data['x'] = points[:, 0]
-    vertex_data['y'] = points[:, 1]
-    vertex_data['z'] = points[:, 2]
+    off = np.zeros(3) if offset is None else offset
+    vertex_data['x'] = points[:, 0].astype(np.float64) + off[0]
+    vertex_data['y'] = points[:, 1].astype(np.float64) + off[1]
+    vertex_data['z'] = points[:, 2].astype(np.float64) + off[2]
     vertex_data['semantic_pred'] = semantic_pred
     vertex_data['instance_pred'] = instance_pred
     vertex_data['instance_score'] = score_array
@@ -300,7 +305,8 @@ def main(scan_name, output_dir, iterations):
         
         
         offset_path = os.path.join('/workspace/data/ForAINetV2/forainetv2_instance_data', scan_name + '_offsets.npy')
-        offsets = np.load(offset_path)
+        offsets = np.load(offset_path).astype(np.float64)
+        print(f"Restoring original coordinate frame, offsets = {offsets}")
         #final_all_points[:, 0] += offsets[0]
         #final_all_points[:, 1] += offsets[1]
         #final_all_points[:, 2] += offsets[2]
@@ -313,13 +319,13 @@ def main(scan_name, output_dir, iterations):
         if os.path.exists(output_path):
             print(f"Skipping save_ply, file already exists: {output_path}")
         else:
-            save_ply(output_path, final_all_points, final_all_labels)
+            save_ply(output_path, final_all_points, final_all_labels, offsets)
 
         output_dir_round = os.path.join(output_dir, f"round_{i}_noisy_score")
         os.makedirs(output_dir_round, exist_ok=True)
         file_path = os.path.join(output_dir_round, f"{scan_name}_noisysegments.ply")
         print(f"Computing instance score & saving noisysegments: {file_path}")
-        instance_scores = process_and_save_ply(final_all_points, final_all_labels, file_path)
+        instance_scores = process_and_save_ply(final_all_points, final_all_labels, file_path, offsets)
         threshold = 200
         print(f"Removing instances with score < {threshold}")
         mask_low_score = (instance_scores < threshold)
@@ -328,7 +334,7 @@ def main(scan_name, output_dir, iterations):
         os.makedirs(output_dir_round, exist_ok=True)
         output_path = os.path.join(output_dir_round, f"{scan_name}_round{i}.ply")
         print(f"Saving filtered PLY: {output_path}")
-        save_ply(output_path, final_all_points, final_all_labels)
+        save_ply(output_path, final_all_points, final_all_labels, offsets)
 
         output_dir_round = os.path.join(output_dir, f"round_{i}")
         output_path = os.path.join(output_dir_round, f"{scan_name}_round{i}.las")
